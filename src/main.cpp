@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include "menu.hpp"
 
-
 typedef enum {
   ON,
   CTRL,
