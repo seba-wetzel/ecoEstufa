@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "menu.hpp"
+#include "pt.h"
 
 typedef enum {
   ON,
@@ -18,12 +19,28 @@ typedef struct
   uint32_t sleep;
 } time_s;
 
+
+
 bool wait (time_s * TIME, uint32_t delay);
 bool task (time_s *TIME, uint32_t delay, void (*cb)() ) ;
 void toggleLed (){
   digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
   //loop();
 }
+
+
+PT_THREAD(pelletDrop(struct pt * pt, uint32_t delay)){
+PT_BEGIN(pt);
+
+while (true)
+{
+  /* code */
+}
+
+
+PT_END(pt);
+};
+
 
 estado_e encendido ();
 estado_e control ();
