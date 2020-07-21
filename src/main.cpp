@@ -1,139 +1,140 @@
-#include <Arduino.h>
-#include "menu.hpp"
-#include "pt.h"
+#include <main.hpp>
 
-typedef enum {
-  ON,
-  CTRL,
-  OFF, 
-  WAITING
-} estado_e;
+static struct pt pellet, LCD;
+uint8_t windPins []= {3,4,5,6}; //pines del ventilador 
+                                //para tener una velocidad cero, poner un pin sin uso al principio
 
-typedef struct
+uint8_t power = 2;
+estado_e ESTUFA = WAITING;
+int count = 0;
+
+
+//Cambia la velocidad del ventilador 
+void windSpeed(uint8_t speed)
 {
-  /* data */
-  uint32_t current;
-  uint32_t last;
-  uint32_t stared;
-  uint32_t elapse;
-  uint32_t sleep;
-} time_s;
-
-
-
-bool wait (time_s * TIME, uint32_t delay);
-bool task (time_s *TIME, uint32_t delay, void (*cb)() ) ;
-void toggleLed (){
-  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-  //loop();
+  for(uint8_t i = 0; i < 4; i++) {
+    if( i == speed) digitalWrite(windPins[i], HIGH);
+    else digitalWrite(windPins[i], LOW);
+  }
 }
 
-
-PT_THREAD(pelletDrop(struct pt * pt, uint32_t delay)){
-PT_BEGIN(pt);
-
-while (true)
+bool timerExpired(timer_s *timer)
 {
-  /* code */
-}
+  uint32_t time = millis();
+  if (time - timer->last >= timer->sleep * 1000U)
+  {
+    timer->last = time;
+    return true;
+  }
+  return false;
+};
 
+void timerSet(timer_s *timer, uint32_t sleep)
+{
+  timer->sleep = sleep;
+};
 
-PT_END(pt);
+PT_THREAD(pelletDrop(struct pt *pt, uint8_t interval, uint8_t duration))
+{
+  PT_BEGIN(pt);
+  static timer_s timer = {.last = millis(), .sleep = interval};
+  static timer_s turn = {.last = millis(), .sleep = duration};
+  while (true)
+  {
+    turn.last = millis();
+    TURN_PELLET_SCREW();
+    PT_WAIT_WHILE(pt, !timerExpired(&turn));
+    STOP_PELLET_SCREW();
+
+    PT_WAIT_UNTIL(pt, timerExpired(&timer));
+  }
+  PT_END(pt);
+};
+
+PT_THREAD(clock(struct pt *pt))
+{
+  static uint16_t counter = TOTAL_TIME_IGNITION;
+  static timer_s timer = {.last = millis(), .sleep = 1};
+  char reloj[9];
+  PT_BEGIN(pt);
+  while (true)
+  {
+    PT_WAIT_UNTIL(pt, timerExpired(&timer));
+    counter--;
+    clock(counter, reloj);
+    printMensaje(reloj);
+    if(counter == 0U) return PT_ENDED;
+  }
+  PT_END(pt);
 };
 
 
-estado_e encendido ();
-estado_e control ();
-estado_e apagado ();
-estado_e waiting ();
-
-estado_e ESTUFA =  WAITING;
-int count = 0;
-
-void setup() {
+void setup()
+{
   // put your setup code here, to run once:
   Serial.begin(9600);
   pinMode(LED_BUILTIN, 1);
   printHello();
-
+  PT_INIT(&pellet);
+  PT_INIT(&LCD);
 }
 
-void loop() {
+void loop()
+{
 
-    switch (ESTUFA)
-    {
-    case WAITING: ESTUFA = waiting();
-      break;
-    
-    case ON: ESTUFA = encendido();
-      break;
-    
-    case CTRL: ESTUFA = control();
-      break;
-    
-    case OFF: ESTUFA = apagado();
-      break;
+  switch (ESTUFA)
+  {
+  case WAITING:
+    ESTUFA = waiting();
+    break;
 
-    default:
-      break;
-    }
+  case ON:
+    ESTUFA = encendido();
+    break;
+
+  case CTRL:
+    ESTUFA = control();
+    break;
+
+  case OFF:
+    ESTUFA = apagado();
+    break;
+
+  default:
+    break;
+  }
 }
 
-estado_e waiting (){
- 
- if( readButton() == select){
-   return ON;
- }
+estado_e waiting()
+{
+
+  if (readButton() == select)
+  {
+    return ON;
+  }
+  delay(100);
   return WAITING;
 }
 
-estado_e encendido (){
-  char  reloj  [9];
-  static time_s TIME = {.current = millis(), .last =millis(), .stared = millis()};
-  
-  task(&TIME, 10, toggleLed); //Una tarea que parpadea un led cada 10 segundos
-  //if((TIME.elapse)>100) return CTRL;
-  clock( TIME.elapse, reloj);
-  printMensaje(reloj);
+estado_e encendido()
+{
+  BURNER_ON();
+  windSpeed(1);
+  pelletDrop(&pellet, PELLET_INTERVAL_START , PELLET_REFUELL_DURATION);
+  if (clock(&LCD) == PT_ENDED) return CTRL;
   return ON;
 }
 
-estado_e control (){
+estado_e control()
+{
+  BURNER_OFF();
+  windSpeed(power);
   printMensaje("Encendio");
   return CTRL;
 }
-estado_e apagado (){
- 
+
+estado_e apagado()
+{
 
   return OFF;
-}
-
-//Hace las veces de un systick del estado y cuenta 
-//el tiempo entre eventos
-//recibe una estructura de tiempo y un valor en segundo para el evento
-//cada estado solo puede tener un evento, los demas se deben calcular
-//por medio de la funcion de callback de la tarea
-bool wait (time_s * TIME, uint32_t delay){
-      TIME->current = millis();
-      if (TIME->current - TIME->last >= 1000) {      
-      TIME->last = TIME->current;
-      TIME->elapse = (TIME->current - TIME->stared)/1000;
-      }
-      if(TIME->elapse - TIME->sleep >= delay) {
-        TIME->sleep = TIME->elapse;
-        return true;
-      }
-      else return false;
-}
-
-//ejecuta un funcion void dada, despues de un tiempo dado
-//si el tiempo no fue alcanzado no bloquea a la continuidad 
-//del estado de la maquina
-bool task (time_s *TIME, uint32_t delay, void (*cb)() ) {
-  //Se llama a wait para calcular el tiempo 
-   if(wait((time_s *)TIME, delay)){
-     (*cb)(); //Funcion de callback
-     return true;
-   }
-   else return false;
 }
